@@ -1,62 +1,105 @@
-name: Extract ZIP and Build APK
+name: Build LingoVault APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and Extract ZIP
+      - name: Find ZIP file
         shell: bash
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found"
+            echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
-          mkdir -p extracted
+          echo "ZIP found: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          rm -rf extracted
+          mkdir extracted
+
           unzip -o "$ZIP_FILE" -d extracted
 
-          shopt -s dotglob
-          ITEMS=(extracted/*)
+          echo "Extracted files:"
+          find extracted -maxdepth 3 -type f | head -100
 
-          if [ ${#ITEMS[@]} -eq 1 ] && [ -d "${ITEMS[0]}" ]; then
-            cp -R "${ITEMS[0]}"/* .
-          else
-            cp -R extracted/* .
+      - name: Locate project
+        shell: bash
+        run: |
+          PROJECT_DIR=$(find extracted -name package.json -type f -print -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: package.json was not found inside ZIP."
+            exit 1
           fi
+
+          echo "Project directory: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Copy project to workspace
+        shell: bash
+        run: |
+          shopt -s dotglob
+
+          rm -rf project
+          mkdir project
+
+          cp -R "$PROJECT_DIR"/* project/
+
+          echo "Project files:"
+          ls -la project
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
-      - name: Install dependencies
+      - name: Install npm dependencies
+        working-directory: project
         run: npm install
 
-      - name: Detect and build web app
+      - name: Show npm scripts
+        working-directory: project
+        run: npm run
+
+      - name: Prepare web files
+        working-directory: project
+        run: npm run www
+
+      - name: Check Capacitor configuration
+        working-directory: project
         shell: bash
         run: |
-          echo "Checking package.json..."
-          cat package.json
+          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.js" ] && [ ! -f "capacitor.config.ts" ]; then
+            echo "ERROR: Capacitor configuration was not found."
+            exit 1
+          fi
 
-          if npm run | grep -q "build"; then
-            echo "Build script found. Running npm run build..."
-            npm run build
+          echo "Capacitor configuration found."
+
+      - name: Check Android project
+        working-directory: project
+        shell: bash
+        run: |
+          if [ ! -d "android" ]; then
+            echo "Android folder not found."
+            echo "Creating Android project..."
+            npx cap add android
           else
-            echo "No build script found."
-            echo "Using existing web files."
+            echo "Android folder already exists."
           fi
 
       - name: Setup Java
@@ -65,18 +108,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Sync Capacitor
+      - name: Sync Capacitor Android
+        working-directory: project
         run: npx cap sync android
 
-      - name: Build APK
-        working-directory: android
+      - name: Build Debug APK
+        working-directory: project/android
         run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LingoVault-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: project/android/app/build/outputs/apk/debug/app
