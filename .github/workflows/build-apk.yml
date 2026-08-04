@@ -15,51 +15,68 @@ jobs:
       - name: Find ZIP file
         shell: bash
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          echo "Searching for ZIP files..."
+
+          ZIP_FILE=$(find . -type f -iname "*.zip" -not -path "./.git/*" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository root."
+            echo "ERROR: No ZIP file found anywhere in repository."
+            echo "Repository contents:"
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "ZIP found: $ZIP_FILE"
+          echo "ZIP found:"
+          echo "$ZIP_FILE"
+
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
       - name: Extract ZIP
         shell: bash
         run: |
+          echo "Extracting:"
+          echo "$ZIP_FILE"
+
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
 
           unzip -o "$ZIP_FILE" -d extracted
 
+          echo "Extraction completed."
+
           echo "Extracted files:"
-          find extracted -maxdepth 3 -type f | head -100
+          find extracted -maxdepth 4 -type f | sort | head -200
 
       - name: Locate project
         shell: bash
         run: |
+          echo "Searching for package.json..."
+
           PROJECT_DIR=$(find extracted -name package.json -type f -print -quit | xargs -r dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: package.json was not found inside ZIP."
+            echo "Extracted directory:"
+            find extracted -maxdepth 5 -type f | sort
             exit 1
           fi
 
-          echo "Project directory: $PROJECT_DIR"
+          echo "Project found at:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Copy project to workspace
+      - name: Copy project
         shell: bash
         run: |
-          shopt -s dotglob
-
           rm -rf project
-          mkdir project
+          mkdir -p project
+
+          shopt -s dotglob
 
           cp -R "$PROJECT_DIR"/* project/
 
-          echo "Project files:"
+          echo "Project root:"
           ls -la project
 
       - name: Setup Node.js
@@ -67,40 +84,13 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install npm dependencies
+      - name: Install dependencies
         working-directory: project
         run: npm install
-
-      - name: Show npm scripts
-        working-directory: project
-        run: npm run
 
       - name: Prepare web files
         working-directory: project
         run: npm run www
-
-      - name: Check Capacitor configuration
-        working-directory: project
-        shell: bash
-        run: |
-          if [ ! -f "capacitor.config.json" ] && [ ! -f "capacitor.config.js" ] && [ ! -f "capacitor.config.ts" ]; then
-            echo "ERROR: Capacitor configuration was not found."
-            exit 1
-          fi
-
-          echo "Capacitor configuration found."
-
-      - name: Check Android project
-        working-directory: project
-        shell: bash
-        run: |
-          if [ ! -d "android" ]; then
-            echo "Android folder not found."
-            echo "Creating Android project..."
-            npx cap add android
-          else
-            echo "Android folder already exists."
-          fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -108,14 +98,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Setup Android
         uses: android-actions/setup-android@v3
 
-      - name: Sync Capacitor Android
+      - name: Check Android project
+        working-directory: project
+        shell: bash
+        run: |
+          if [ ! -d "android" ]; then
+            echo "Android project not found."
+            echo "Creating Android project..."
+            npx cap add android
+          else
+            echo "Android project already exists."
+          fi
+
+      - name: Sync Capacitor
         working-directory: project
         run: npx cap sync android
 
-      - name: Build Debug APK
+      - name: Build APK
         working-directory: project/android
         run: ./gradlew assembleDebug
 
@@ -123,4 +125,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: LingoVault-APK
-          path: project/android/app/build/outputs/apk/debug/app
+          path: project/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
