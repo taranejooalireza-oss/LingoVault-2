@@ -42,8 +42,19 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build web app
-        run: npm run build
+      - - name: Detect and build web app
+  shell: bash
+  run: |
+    echo "Checking package.json..."
+    cat package.json
+
+    if npm run | grep -q "build"; then
+      echo "Build script found. Running npm run build..."
+      npm run build
+    else
+      echo "No build script found."
+      echo "Using existing web files."
+    fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
